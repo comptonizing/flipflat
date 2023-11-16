@@ -18,7 +18,7 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
  
  
-AC_INIT([flipflat-driver], [0.2], [philipp.ph.weber@fau.de])
+AC_INIT([flipflat-driver], [0.1], [philipp.ph.weber@fau.de])
 
 AC_PREFIX_DEFAULT([/usr])
 
