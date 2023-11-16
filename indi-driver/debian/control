@@ -1,0 +1,16 @@
+Source: indi-pollux-flipflat
+Section: science
+Priority: optional
+Maintainer: Philipp Weber <philipp@whyisitso.de>
+Build-Depends: debhelper-compat (= 12), libindi-dev, libtool, libz-dev, libnova-dev
+Standards-Version: 4.5.0
+Homepage: https://github.com/comptonizing/flipflat
+
+Package: indi-pollux-flipflat
+Architecture: amd64
+Multi-Arch: foreign
+Depends: ${misc:Depends}, ${shlibs:Depends}, libindi1
+Description: INDI driver for the Pollux Astro FlipFlat
+ This package contains the INDI driver for the Pollux Astro FlipFlat.
+ .
+ This driver is compatible with any INDI client such as KStars or Xephem.
