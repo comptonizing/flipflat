@@ -4,11 +4,14 @@ Flap::Flap() {
 	pinMode(m_flatPin, OUTPUT);
 	digitalWrite(m_flatPin, LOW);
 	m_panelState = OFF;
-	m_servo.setInitialPosition(1.0); // closed
+  m_servo.setDetach(false);
+	m_servo.setPin(m_servoPin);
 	m_servo.setSpeed(10.0);
 	m_servo.setMinMax(700, 1500);
-	m_servo.setPin(m_servoPin);
+  m_servo.setInitialPosition(1.0); // closed
 	m_flapState = CLOSED;
+  open(); // Please don't ask me why, but I have to put an open here in order to get it closed.
+  m_servo.update();
 }
 
 void Flap::update() {

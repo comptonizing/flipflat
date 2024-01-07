@@ -119,6 +119,8 @@ bool runCommand(const char *cmd) {
 }
 
 void setup() {
+  Flap::i().update();
+  Flap::i().close();
   Serial.begin(9600);
   Serial.setTimeout(1000);
 }
