@@ -7,7 +7,7 @@ const char *FlipFlat::getDefaultName() {
 }
 
 
-FlipFlat::FlipFlat() : LightBoxInterface(this, false) {
+FlipFlat::FlipFlat() : LightBoxInterface(this), DustCapInterface(this) {
 	setDefaultPollingPeriod(500);
 	setVersion(0, 1);
 }
@@ -99,8 +99,9 @@ bool FlipFlat::sendCommand(const char *cmd, char *rsp) {
 
 bool FlipFlat::initProperties() {
 	INDI::DefaultDevice::initProperties();
-	initDustCapProperties(getDeviceName(), MAIN_CONTROL_TAB);
-	initLightBoxProperties(getDeviceName(), MAIN_CONTROL_TAB);
+	DI::initProperties(MAIN_CONTROL_TAB);
+	LI::initProperties(MAIN_CONTROL_TAB, 0);
+
 	setDriverInterface(AUX_INTERFACE | LIGHTBOX_INTERFACE | DUSTCAP_INTERFACE);
 	addAuxControls();
 	serialConnection = new Connection::Serial(this);
@@ -146,37 +147,35 @@ uint16_t FlipFlat::crcCalc(const char *str) {
 
 void FlipFlat::ISGetProperties(const char *dev) {
 	INDI::DefaultDevice::ISGetProperties(dev);
-	isGetLightBoxProperties(dev);
+	LI::ISGetProperties(dev);
 }
 
 bool FlipFlat::updateProperties() {
 	INDI::DefaultDevice::updateProperties();
 	if ( isConnected() ) {
-		defineProperty(&ParkCapSP);
-		defineProperty(&LightSP);
-		updateLightBoxProperties();
+		DI::updateProperties();
+		LI::updateProperties();
 	} else {
-		deleteProperty(ParkCapSP.name);
-		deleteProperty(LightSP.name);
-		updateLightBoxProperties();
+		DI::updateProperties();
+		LI::updateProperties();
 	}
 	return true;
 }
 
 bool FlipFlat::ISNewSwitch(const char *dev, const char *name, ISState *states, char *names[], int n) {
 	if (dev != nullptr && strcmp(dev, getDeviceName()) == 0) {
-		if ( processDustCapSwitch(dev, name, states, names, n) ) {
+		if (DI::processSwitch(dev, name, states, names, n)) {
 			return true;
 		}
-		if ( processLightBoxSwitch(dev, name, states, names, n) ) {
-			return true;
+		if (LI::processSwitch(dev, name, states, names, n)) {
+			return false;
 		}
 	}
 	return INDI::DefaultDevice::ISNewSwitch(dev, name, states, names, n);
 }
 
 bool FlipFlat::ISNewNumber(const char *dev, const char *name, double values[], char *names[], int n) {
-	if ( processLightBoxNumber(dev, name, values, names, n) ) {
+	if (LI::processNumber(dev, name, values, names, n)) {
 		return true;
 	}
 	return INDI::DefaultDevice::ISNewNumber(dev, name, values, names, n);
@@ -184,7 +183,7 @@ bool FlipFlat::ISNewNumber(const char *dev, const char *name, double values[], c
 
 bool FlipFlat::ISNewText(const char *dev, const char *name, char *texts[], char *names[], int n) {
 	if ( dev != nullptr && strcmp(dev, getDeviceName()) == 0 ) {
-		if ( processLightBoxText(dev, name, texts, names, n) ) {
+		if (LI::processText(dev, name, texts, names, n)) {
 			return true;
 		}
 	}
@@ -192,37 +191,51 @@ bool FlipFlat::ISNewText(const char *dev, const char *name, char *texts[], char 
 }
 
 bool FlipFlat::ISSnoopDevice(XMLEle *root) {
-	snoopLightBox(root);
+	LI::snoop(root);
 	return INDI::DefaultDevice::ISSnoopDevice(root);
 }
 
 bool FlipFlat::FlipFlat::saveConfigItems(FILE *fp) {
 	INDI::DefaultDevice::saveConfigItems(fp);
-	return saveLightBoxConfigItems(fp);
+	return LI::saveConfigItems(fp);
 }
 
 IPState FlipFlat::ParkCap() {
+	if ( strcmp(previousFlapStatus, "closed") == 0 ) {
+		return IPS_OK;
+	}
 	char rsp[RSPBUFF];
-	if ( ! sendCommand("close", rsp) ) {
+	if ( ! sendCommand("close", rsp) || ! updateFromResponse(rsp) ) {
 		return IPS_ALERT;
 	}
-	updateFromResponse(rsp);
-	return IPS_BUSY;
+	return strcmp(previousFlapStatus, "closed") == 0 ? IPS_OK : IPS_BUSY; // if already parked return IPS_OK
 }
 
 IPState FlipFlat::UnParkCap() {
+	if ( strcmp(previousFlapStatus, "open") == 0 ) {
+		return IPS_OK;
+	}
 	char rsp[RSPBUFF];
-	if ( ! sendCommand("open", rsp) ) {
+	if ( ! updateStatus() ) {
 		return IPS_ALERT;
 	}
-	updateFromResponse(rsp);
-	return IPS_BUSY;
+	if ( strcmp(previousPanelStatus, "on") == 0 ) {
+		LOG_WARN("Opening cover, but panel switch on, switching off");
+		if ( ! EnableLightBox(false) ) {
+			return IPS_ALERT;
+		}
+	}
+
+	if ( ! sendCommand("open", rsp) || ! updateFromResponse(rsp) ) {
+		return IPS_ALERT;
+	}
+	return strcmp(previousFlapStatus, "open") == 0 ? IPS_OK : IPS_BUSY; // if already unparked return IPS_OK
 }
 
 bool FlipFlat::EnableLightBox(bool enable) {
 	updateStatus();
 	if ( enable ) {
-		if ( ParkCapSP.s != IPS_OK || ParkCapS[CAP_PARK].s != ISS_ON ) {
+		if ( ParkCapSP[1].getState() == ISS_ON ) {
 			LOG_ERROR("Can't switch on flat unless cover is closed!");
 			return false;
 		}
@@ -234,10 +247,9 @@ bool FlipFlat::EnableLightBox(bool enable) {
 	} else {
 		strcpy(cmd, "off");
 	}
-	if ( ! sendCommand(cmd, rsp) ) {
+	if ( ! sendCommand(cmd, rsp) || ! updateFromResponse(rsp) ) {
 		return false;
 	}
-	updateFromResponse(rsp);
 	return true;
 }
 
@@ -269,37 +281,50 @@ bool FlipFlat::updateFromResponse(const char *rsp) {
 	std::string panelStatus = data["P"].template get<std::string>();
 	std::string flapStatus = data["F"].template get<std::string>();
 
-	if ( panelStatus == "off" ) {
-		LightS[FLAT_LIGHT_ON].s = ISS_OFF;
-		LightS[FLAT_LIGHT_OFF].s = ISS_ON;
-		IDSetSwitch(&LightSP, nullptr);
-	} else if ( panelStatus == "on" ) {
-		LightS[FLAT_LIGHT_ON].s = ISS_ON;
-		LightS[FLAT_LIGHT_OFF].s = ISS_OFF;
-		IDSetSwitch(&LightSP, nullptr);
-	} else {
-		LOGF_ERROR("Unknown flat status: %s", panelStatus.c_str());
-		return false;
+
+	if ( panelStatus != previousPanelStatus ) {
+	    if ( panelStatus == "off" ) {
+			LightSP.reset();
+	    	LightSP[FLAT_LIGHT_ON].setState(ISS_OFF);
+	    	LightSP[FLAT_LIGHT_OFF].setState(ISS_ON);
+	    	LightSP.apply();
+			LOG_INFO("Light off");
+	    } else if ( panelStatus == "on" ) {
+			LightSP.reset();
+	    	LightSP[FLAT_LIGHT_ON].setState(ISS_ON);
+	    	LightSP[FLAT_LIGHT_OFF].setState(ISS_OFF);
+	    	LightSP.apply();
+			LOG_INFO("Light on");
+	    } else {
+	    	LOGF_ERROR("Unknown flat status: %s", panelStatus.c_str());
+	    	return false;
+	    }
+		strncpy(previousPanelStatus, panelStatus.c_str(), sizeof(previousPanelStatus)-1);
 	}
 
-	if ( flapStatus == "closed" ) {
-		ParkCapS[CAP_PARK].s = ISS_ON;
-		ParkCapS[CAP_UNPARK].s = ISS_OFF;
-		IDSetSwitch(&ParkCapSP, nullptr);
-		ParkCapSP.s = IPS_OK;
-		IDSetSwitch(&ParkCapSP, nullptr);
-	} else if ( flapStatus == "open" ) {
-		ParkCapS[CAP_PARK].s = ISS_OFF;
-		ParkCapS[CAP_UNPARK].s = ISS_ON;
-		IDSetSwitch(&ParkCapSP, nullptr);
-		ParkCapSP.s = IPS_OK;
-		IDSetSwitch(&ParkCapSP, nullptr);
-	} else if ( flapStatus == "opening" || flapStatus == "closing" ) {
-		ParkCapSP.s = IPS_BUSY;
-		IDSetSwitch(&ParkCapSP, nullptr);
-	} else {
-		LOGF_ERROR("Unknown cover status: %s", flapStatus.c_str());
-		return false;
+	if ( flapStatus != previousFlapStatus ) {
+	    if ( flapStatus == "closed" ) {
+	    	 ParkCapSP.reset();
+	    	 ParkCapSP[CAP_PARK].setState(ISS_ON);
+	    	 ParkCapSP.setState(IPS_OK);
+	    	 ParkCapSP.apply();
+	    	 LOG_INFO("Cover closed");
+	    } else if ( flapStatus == "open" ) {
+	    	 ParkCapSP.reset();
+	    	 ParkCapSP[CAP_UNPARK].setState(ISS_ON);
+	    	 ParkCapSP.setState(IPS_OK);
+	    	 ParkCapSP.apply();
+	    	 LOG_INFO("Cover opened");
+	    } else if ( flapStatus == "opening" || flapStatus == "closing" ) {
+	    	 ParkCapSP.reset();
+	    	 ParkCapSP.setState(IPS_BUSY);
+	    	 ParkCapSP.apply();
+	    	 LOG_INFO("Cover moving");
+	    } else {
+	    	LOGF_ERROR("Unknown cover status: %s", flapStatus.c_str());
+	    	return false;
+	    }
+		strncpy(previousFlapStatus, flapStatus.c_str(), sizeof(previousFlapStatus)-1);
 	}
 
     return true;

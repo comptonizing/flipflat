@@ -51,4 +51,6 @@ class FlipFlat : public INDI::DefaultDevice, public INDI::LightBoxInterface, pub
 		Connection::Serial *serialConnection{ nullptr };
 		bool updateStatus();
 		bool updateFromResponse(const char *rsp);
+		char previousPanelStatus[32] = "unknown";
+		char previousFlapStatus[32] = "unknown";
 };
